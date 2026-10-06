@@ -562,26 +562,19 @@ void router_init(const uint8_t* mac, const char* ssid, const char* ent_username,
 
 #else
     // Internal EMAC + LAN8720 (WT32-ETH01)
-    // Power on LAN8720 PHY via GPIO before EMAC init
-#if CONFIG_ETH_PHY_POWER_GPIO >= 0
-    gpio_config_t phy_power_cfg = {
-        .pin_bit_mask = (1ULL << CONFIG_ETH_PHY_POWER_GPIO),
-        .mode = GPIO_MODE_OUTPUT,
-    };
-    gpio_config(&phy_power_cfg);
-    gpio_set_level(CONFIG_ETH_PHY_POWER_GPIO, 1);
-    vTaskDelay(pdMS_TO_TICKS(20));  // Let PHY power stabilize
-#endif
+    // LAN8720 has no oscillator: it needs the 50 MHz RMII REF_CLK from ESP32 GPIO16
 
     eth_mac_config_t mac_config = ETH_MAC_DEFAULT_CONFIG();
     eth_esp32_emac_config_t emac_config = ETH_ESP32_EMAC_DEFAULT_CONFIG();
     emac_config.smi_gpio.mdc_num  = CONFIG_ETH_MDC_GPIO;
     emac_config.smi_gpio.mdio_num = CONFIG_ETH_MDIO_GPIO;
+    emac_config.clock_config.rmii.clock_mode = EMAC_CLK_OUT;
+    emac_config.clock_config.rmii.clock_gpio = EMAC_CLK_OUT_GPIO;  // GPIO16
     esp_eth_mac_t *eth_mac = esp_eth_mac_new_esp32(&emac_config, &mac_config);
 
     eth_phy_config_t phy_config = ETH_PHY_DEFAULT_CONFIG();
     phy_config.phy_addr       = CONFIG_ETH_PHY_ADDR;
-    phy_config.reset_gpio_num = -1;  // Power handled via GPIO above
+    phy_config.reset_gpio_num = -1;  // LAN8720 reset tied to module EN
     esp_eth_phy_t *phy = esp_eth_phy_new_lan87xx(&phy_config);
 #endif  // CONFIG_ETH_DOWNLINK_W5500
 
@@ -1059,6 +1052,9 @@ void app_main(void)
     if (eth_nat_enabled) {
         ip_napt_enable(my_ap_ip, 1);
         ESP_LOGI(TAG, "NAT is enabled");
+        // NAPT portmap table is only allocated by ip_napt_enable(); an earlier
+        // apply from the GOT_IP event was a silent no-op if WiFi won the race.
+        apply_portmap_tab();
     } else {
         ESP_LOGI(TAG, "NAT is disabled (routed mode)");
     }
